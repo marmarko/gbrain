@@ -104,10 +104,15 @@ case "${GBRAIN_ROLE:-web}" in
     # itself, so a redeploy at 03:05 cannot produce a second run for that day.
     HOUR="${GBRAIN_DREAM_HOUR_UTC:-3}"
     while :; do
-      # 10# forces base-10; `date -u +%H` yields 08/09, which are invalid octal.
-      now=$(( 10#$(date -u +%H) * 3600 + 10#$(date -u +%M) * 60 + 10#$(date -u +%S) ))
-      delta=$(( HOUR * 3600 - now ))
+      # Epoch modulo 86400 == seconds since UTC midnight. Deliberately avoids
+      # parsing %H/%M/%S: those are zero-padded, and the `10#` base prefix that
+      # would make them safe is a bashism this image's /bin/sh (dash) rejects.
+      secs_today=$(( $(date -u +%s) % 86400 ))
+      delta=$(( HOUR * 3600 - secs_today ))
       [ "$delta" -le 0 ] && delta=$(( delta + 86400 ))
+      # Floor the sleep. If delta were ever empty or non-positive, a bare
+      # `sleep` would return instantly and spin the loop hot.
+      [ "$delta" -ge 1 ] 2>/dev/null || delta=3600
       echo "[dream] sleeping ${delta}s until ${HOUR}:00 UTC" >&2
       sleep "$delta"
       # Never exit the loop on failure: one bad night must not silently end
