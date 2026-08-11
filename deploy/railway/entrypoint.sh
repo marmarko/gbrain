@@ -94,8 +94,29 @@ case "${GBRAIN_ROLE:-web}" in
 
     exec gbrain autopilot --repo "$BRAIN_DIR"
     ;;
+  dream)
+    # Nightly synthesis. Self-scheduling rather than a platform cron: Railway
+    # exposes no cron subcommand in the CLI, and the `--service-config` path
+    # that would set one silently reports "No changes to apply" without
+    # committing. A sleep-until-target loop needs no platform feature at all.
+    #
+    # Idempotent across restarts: dream.auto_think.cooldown_days gates the work
+    # itself, so a redeploy at 03:05 cannot produce a second run for that day.
+    HOUR="${GBRAIN_DREAM_HOUR_UTC:-3}"
+    while :; do
+      # 10# forces base-10; `date -u +%H` yields 08/09, which are invalid octal.
+      now=$(( 10#$(date -u +%H) * 3600 + 10#$(date -u +%M) * 60 + 10#$(date -u +%S) ))
+      delta=$(( HOUR * 3600 - now ))
+      [ "$delta" -le 0 ] && delta=$(( delta + 86400 ))
+      echo "[dream] sleeping ${delta}s until ${HOUR}:00 UTC" >&2
+      sleep "$delta"
+      # Never exit the loop on failure: one bad night must not silently end
+      # every future night. The cooldown still advances only on success.
+      bun /app/deploy/railway/run-auto-think.ts || echo "[dream] run failed; will retry tomorrow" >&2
+    done
+    ;;
   *)
-    echo "entrypoint: unknown GBRAIN_ROLE='${GBRAIN_ROLE}' (expected 'web' or 'worker')" >&2
+    echo "entrypoint: unknown GBRAIN_ROLE='${GBRAIN_ROLE}' (expected 'web', 'worker', 'autopilot' or 'dream')" >&2
     exit 1
     ;;
 esac
