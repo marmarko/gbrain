@@ -22,4 +22,10 @@ RUN printf '#!/bin/sh\nexec bun /app/src/cli.ts "$@"\n' > /usr/local/bin/gbrain 
 ENV GBRAIN_HOME=/data
 RUN mkdir -p /data
 
-CMD ["gbrain", "--help"]
+# One image, both services. GBRAIN_ROLE (a Railway service variable) selects
+# which process runs — see entrypoint.sh for why the role lives in a variable
+# rather than in Railway's per-service startCommand.
+COPY deploy/railway/entrypoint.sh /usr/local/bin/gbrain-entrypoint
+RUN chmod +x /usr/local/bin/gbrain-entrypoint
+
+CMD ["/usr/local/bin/gbrain-entrypoint"]

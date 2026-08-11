@@ -36,13 +36,31 @@ railway add --service web --json
 railway add --service worker --json
 ```
 
-Point each service at its config file in **Settings → Config as code**:
+Both services build the same `deploy/railway/Dockerfile` and differ only by
+the `GBRAIN_ROLE` variable, which `entrypoint.sh` dispatches on.
 
-- `web` → `deploy/railway/web.json`
-- `worker` → `deploy/railway/worker.json`
+Select the Dockerfile and the role with service variables:
 
-Both build the same `deploy/railway/Dockerfile` and differ only in start
-command.
+```bash
+railway variable set RAILWAY_DOCKERFILE_PATH=deploy/railway/Dockerfile --service web
+railway variable set GBRAIN_ROLE=web    --service web
+railway variable set RAILWAY_DOCKERFILE_PATH=deploy/railway/Dockerfile --service worker
+railway variable set GBRAIN_ROLE=worker --service worker
+```
+
+**Why the role is a variable rather than a per-service start command.**
+`railway environment edit --service-config <svc> deploy.startCommand ...`
+reports `{"committed":false,"message":"No changes to apply"}` and never
+commits — including for keys the service has never had, so the message is not
+a signal that the value was already correct. Without a start command Railway
+falls back to Railpack auto-detection and ignores the Dockerfile entirely.
+Service *variables* set reliably, so the role travels as data and the dispatch
+lives in the image.
+
+The two `*.json` files describe the same build for anyone wiring **Settings →
+Config as code** in the dashboard, which is the path that does honor
+`healthcheckPath` and the restart policy. They deliberately omit
+`startCommand` so they cannot contradict the entrypoint.
 
 Expect the first build of each service to be slow — the dependency tree is
 large (AI SDKs, AWS SDK, PGLite, tree-sitter WASM grammars) and a cold
@@ -60,7 +78,9 @@ Set on **both** services:
 | `GBRAIN_DATABASE_URL` | your brain's connection string | Preferred over `DATABASE_URL`, which `config.ts:561` ignores when it matches a cwd `.env`. Always honored. |
 | `GBRAIN_EMBEDDING_MODEL` | e.g. `litellm:openai/text-embedding-3-large` | Must match what the brain was embedded with |
 | `GBRAIN_EMBEDDING_DIMENSIONS` | the brain's vector width | A mismatch against the `vector(N)` column fails at startup (`serve-http.ts:601`) |
-| provider API key | e.g. `OPENAI_API_KEY` | Whatever your embedding gateway authenticates with |
+| provider API key | e.g. `OPENAI_API_KEY`, or `LITELLM_BASE_URL` + `LITELLM_API_KEY` | Whatever your embedding gateway authenticates with |
+| `RAILWAY_DOCKERFILE_PATH` | `deploy/railway/Dockerfile` | Without it Railway ignores the Dockerfile and auto-detects with Railpack |
+| `GBRAIN_ROLE` | `web` or `worker` | Selects the process in `entrypoint.sh` |
 
 `engine` needs no variable — `config.ts:605` infers `postgres` from the URL.
 Per-provider base URLs can live in the database (`config.ts:758` reads the
