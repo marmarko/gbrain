@@ -1,0 +1,12 @@
+.git
+node_modules
+bin
+dist
+.gbrain-evals
+*.log
+
+# Never let a local secrets file into the build context — Railway injects
+# GBRAIN_DATABASE_URL and provider keys as service variables instead.
+.env
+.env.*
+!.env.example
