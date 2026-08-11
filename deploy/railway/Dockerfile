@@ -12,6 +12,12 @@ RUN bun install --frozen-lockfile
 FROM oven/bun:1
 WORKDIR /app
 
+# git + ssh client for the autopilot role: it clones the brain repo over SSH and
+# gbrain commits/pushes back to it. Harmless for the web/worker roles.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git openssh-client ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
