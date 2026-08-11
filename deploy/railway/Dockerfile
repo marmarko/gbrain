@@ -1,6 +1,12 @@
 FROM oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
+# package.json's postinstall runs scripts/postinstall.ts, so that path must
+# exist before install or bun aborts with "Module not found". The script is a
+# no-op here (it looks for a `gbrain` binary on PATH and exits 0 when absent),
+# but it has to be present. Copying it beats --ignore-scripts, which would also
+# suppress dependencies' own install scripts.
+COPY scripts/ ./scripts/
 RUN bun install --frozen-lockfile
 
 FROM oven/bun:1
