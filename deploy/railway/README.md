@@ -95,6 +95,37 @@ Set on **`web`** only:
 | `GBRAIN_HTTP_CORS_ORIGIN` | comma-separated origins | **Required.** With `--bind 0.0.0.0` and this unset, OAuth endpoints reject *all* cross-origin requests (`serve-http.ts:808`). |
 | `GBRAIN_ADMIN_BOOTSTRAP_TOKEN` | a value you generate | Railway is non-TTY, so the generated token is suppressed to keep it out of log storage. Set your own or you cannot reach `/admin`. |
 
+### Put the shared secrets in shared variables
+
+Values identical across both services — the gateway key, the database URL, the
+gateway base URL — belong in environment-level **shared variables**, not copied
+per service. Rotation then touches one place instead of four, which is the
+difference between a clean key swap and a half-updated deploy that fails only
+on the service you forgot.
+
+Shared variables are **not** auto-injected; each service opts in by reference:
+
+```bash
+# once, at environment level
+railway environment edit --json <<'JSON'
+{"sharedVariables":{"AI_GATEWAY_API_KEY":{"value":"vck_…"}}}
+JSON
+
+# then on each service
+railway variable set 'AI_GATEWAY_API_KEY=${{shared.AI_GATEWAY_API_KEY}}' --service web
+railway variable set 'LITELLM_API_KEY=${{shared.AI_GATEWAY_API_KEY}}'    --service web
+```
+
+Pointing `LITELLM_API_KEY` at `shared.AI_GATEWAY_API_KEY` is deliberate: the
+credential is a Vercel AI Gateway key and deserves that name, but gbrain has no
+Vercel provider — it reaches the gateway through the generic OpenAI-compatible
+`litellm-proxy` recipe, which reads `LITELLM_API_KEY`. One value, honest name,
+and gbrain still finds it. Do not also create a shared `LITELLM_API_KEY`;
+nothing would reference it and Railway flags it as unused.
+
+Unlike `--service-config`, `railway environment edit --json` for shared
+variables genuinely commits (`"committed":true`) — but read it back anyway.
+
 Leave `GBRAIN_ALLOW_SHELL_JOBS` **unset** unless you are actually submitting
 shell jobs. It lets queued jobs execute arbitrary commands in the container;
 on a network-reachable deployment that turns queue-write access into remote
