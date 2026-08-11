@@ -169,8 +169,28 @@ share a disk. Do not plan on a shared brain-repo checkout.
 Use storage tiering instead — `docs/storage-tiering.md` covers this under
 "Container-based deployments." Mark bulk directories `db_only` so Postgres is
 the system of record and local disk is only a cache; `gbrain export
---restore-only` rehydrates on demand. Mount a volume at `/data` on `worker`
-alone to persist `supervisor.pid` and audit logs across deploys.
+--restore-only` rehydrates on demand.
+
+### Persisting audit logs
+
+Container filesystems are wiped on every deploy, so the worker's audit trail
+does not survive a redeploy without a volume:
+
+```bash
+railway link --project <p> --environment production --service worker
+railway volume add --mount-path /data
+railway variable set GBRAIN_AUDIT_DIR=/data/audit --service worker
+```
+
+Set `GBRAIN_AUDIT_DIR` explicitly rather than relying on the Dockerfile's
+`GBRAIN_HOME=/data` to derive it. Both land on the volume — `resolveAuditDir()`
+checks the env var first and otherwise falls back to `gbrainPath('audit')` —
+but the explicit form is one observable fact instead of a three-link inference
+through `configDir()`, and it keeps working if `GBRAIN_HOME` is ever overridden.
+
+The supervisor PID file is **not** covered: `supervisor.ts` resolves it from
+`$HOME`, not `GBRAIN_HOME`, so it stays at `/root/.gbrain/`. That is correct —
+a PID file from a dead container has no meaning in the next one.
 
 ## What does not move
 

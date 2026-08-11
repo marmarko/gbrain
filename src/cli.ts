@@ -8,6 +8,14 @@ installSigchldHandler();
 // (e.g. during connectEngine's schema-probe path) are covered too.
 import { installSignalHandlers as installCleanupSignalHandlers } from './core/process-cleanup.ts';
 installCleanupSignalHandlers();
+// Fill provider credentials from ~/.gbrain/env before anything reads them.
+// The file is gbrain's own convention but nothing loaded it, so it only worked
+// for processes started from a shell that sources it — launchd, cron, and
+// desktop MCP clients spawning `gbrain serve` got no keys and failed with
+// opaque provider auth errors. The real environment still wins; this only ever
+// fills gaps, so container service variables and `FOO=x gbrain …` are unaffected.
+import { loadGbrainEnvFile } from './core/env-file.ts';
+loadGbrainEnvFile();
 
 import { readFileSync, existsSync, unlinkSync, fstatSync } from 'fs';
 import { spawn } from 'child_process';
