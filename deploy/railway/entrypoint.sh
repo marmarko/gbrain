@@ -27,33 +27,64 @@ case "${GBRAIN_ROLE:-web}" in
     BRAIN_DIR="${GBRAIN_BRAIN_DIR:-/app/brain}"
     BRANCH="${GBRAIN_BRAIN_BRANCH:-main}"
 
-    if [ -n "${GBRAIN_BRAIN_DEPLOY_KEY_B64:-}" ]; then
-      mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    # A GitHub deploy key authorizes exactly one repo, so multiple repos need
+    # multiple keys — and ssh cannot tell them apart by hostname alone, since
+    # both are github.com. Each key therefore gets a Host alias that pins it via
+    # IdentitiesOnly; clone URLs use `git@<alias>:owner/repo.git`.
+    mkdir -p /root/.ssh && chmod 700 /root/.ssh
+    : > /root/.ssh/config && chmod 600 /root/.ssh/config
+
+    add_deploy_key() {  # $1 = host alias, $2 = base64 private key
+      [ -n "$2" ] || return 0
+      _kf="/root/.ssh/id_$1"
       # base64 because an OpenSSH private key is multi-line and env-var
       # round-tripping through a platform UI mangles embedded newlines.
-      printf '%s' "$GBRAIN_BRAIN_DEPLOY_KEY_B64" | base64 -d > /root/.ssh/id_ed25519
-      chmod 600 /root/.ssh/id_ed25519
-      # Pin the host key instead of StrictHostKeyChecking=no, which would accept
-      # any MITM offering itself as github.com.
-      ssh-keyscan -t ed25519 github.com > /root/.ssh/known_hosts 2>/dev/null
-      chmod 644 /root/.ssh/known_hosts
-    fi
+      printf '%s' "$2" | base64 -d > "$_kf"
+      chmod 600 "$_kf"
+      {
+        echo "Host $1"
+        echo "  HostName github.com"
+        echo "  User git"
+        echo "  IdentityFile $_kf"
+        echo "  IdentitiesOnly yes"
+      } >> /root/.ssh/config
+      echo "entrypoint: deploy key registered for alias $1" >&2
+    }
+
+    add_deploy_key gh-sam-brain "${GBRAIN_BRAIN_DEPLOY_KEY_B64:-}"
+    add_deploy_key gh-obsidian  "${GBRAIN_OBSIDIAN_DEPLOY_KEY_B64:-}"
+
+    # Pin the host key instead of StrictHostKeyChecking=no, which would accept
+    # any MITM offering itself as github.com. One entry covers every alias
+    # because they all resolve to HostName github.com.
+    ssh-keyscan -t ed25519 github.com > /root/.ssh/known_hosts 2>/dev/null
+    chmod 644 /root/.ssh/known_hosts
 
     git config --global user.name "${GBRAIN_GIT_USER_NAME:-gbrain autopilot}"
     git config --global user.email "${GBRAIN_GIT_USER_EMAIL:-autopilot@gbrain.local}"
     git config --global --add safe.directory "$BRAIN_DIR"
 
-    if [ -n "${GBRAIN_BRAIN_REPO:-}" ]; then
-      if [ -d "$BRAIN_DIR/.git" ]; then
+    clone_or_update() {  # $1 = remote, $2 = dest, $3 = branch
+      [ -n "$1" ] || return 0
+      if [ -d "$2/.git" ]; then
         # Reset rather than pull: the container holds no work worth preserving,
         # and a merge conflict here would wedge the loop with no operator present.
-        git -C "$BRAIN_DIR" fetch origin "$BRANCH" && \
-          git -C "$BRAIN_DIR" reset --hard "origin/$BRANCH"
+        git -C "$2" fetch origin "$3" && git -C "$2" reset --hard "origin/$3"
       else
-        # Full clone, not --depth 1: gbrain pushes back, and a shallow clone
-        # makes that fragile.
-        git clone --branch "$BRANCH" "$GBRAIN_BRAIN_REPO" "$BRAIN_DIR"
+        # Full clone, not --depth 1: gbrain pushes back to the brain repo, and a
+        # shallow clone makes that fragile.
+        git clone --branch "$3" "$1" "$2"
       fi
+      git config --global --add safe.directory "$2"
+    }
+
+    clone_or_update "${GBRAIN_BRAIN_REPO:-}" "$BRAIN_DIR" "$BRANCH"
+    # Secondary content source (Obsidian vault). Read-only; a failure here must
+    # not stop the brain's own cycle, so it is not fatal.
+    if [ -n "${GBRAIN_OBSIDIAN_REPO:-}" ]; then
+      clone_or_update "$GBRAIN_OBSIDIAN_REPO" "${GBRAIN_OBSIDIAN_DIR:-/app/obsidian}" \
+        "${GBRAIN_OBSIDIAN_BRANCH:-main}" \
+        || echo "entrypoint: obsidian clone/update failed — continuing without it" >&2
     fi
 
     if [ ! -d "$BRAIN_DIR/.git" ]; then
