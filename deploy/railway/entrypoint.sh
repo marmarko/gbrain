@@ -8,22 +8,20 @@
 # variable and the dispatch lives here in the image.
 set -e
 
-case "${GBRAIN_ROLE:-web}" in
-  web)
-    # --bind 0.0.0.0 is required: the default flipped to 127.0.0.1 in v0.34.1,
-    # and Railway's proxy reaches the container over its private interface.
-    exec gbrain serve --http \
-      --port "${PORT:-8080}" \
-      --bind 0.0.0.0 \
-      --public-url "https://${RAILWAY_PUBLIC_DOMAIN}"
-    ;;
-  worker)
-    exec gbrain jobs supervisor --concurrency "${GBRAIN_WORKER_CONCURRENCY:-2}"
-    ;;
-  autopilot)
-    # The autopilot's main job is `sync`, which reads AND writes the brain repo
-    # (gbrain commits and pushes back — see brain-repo-durability.ts), so the
-    # deploy key must be read-write and git needs a committer identity.
+# Clone/refresh the brain repo and configure git + deploy keys.
+#
+# Called by BOTH the worker and autopilot roles. It used to run only for
+# autopilot, which was a bug: `sync` jobs go to the shared 'default' queue and
+# BOTH the standalone worker service and the autopilot's own embedded worker
+# drain it. Whichever claimed a sync job first ran it — and in the worker
+# container /app/brain did not exist, so the job died with "Not inside a git
+# repository: /app/brain". Roughly half of all syncs were lost that way, while
+# the surviving half kept last_commit moving so the failure looked intermittent
+# rather than structural.
+setup_brain_repo() {
+    # `sync` reads AND writes the brain repo (gbrain commits and pushes back —
+    # see brain-repo-durability.ts), so the deploy key must be read-write and git
+    # needs a committer identity in every container that might run a sync job.
     BRAIN_DIR="${GBRAIN_BRAIN_DIR:-/app/brain}"
     BRANCH="${GBRAIN_BRAIN_BRANCH:-main}"
 
@@ -92,6 +90,26 @@ case "${GBRAIN_ROLE:-web}" in
       exit 1
     fi
 
+}
+
+
+case "${GBRAIN_ROLE:-web}" in
+  web)
+    # --bind 0.0.0.0 is required: the default flipped to 127.0.0.1 in v0.34.1,
+    # and Railway's proxy reaches the container over its private interface.
+    exec gbrain serve --http \
+      --port "${PORT:-8080}" \
+      --bind 0.0.0.0 \
+      --public-url "https://${RAILWAY_PUBLIC_DOMAIN}"
+    ;;
+  worker)
+    # Needs the brain repo: this service drains the same 'default' queue the
+    # autopilot dispatches sync jobs onto.
+    setup_brain_repo
+    exec gbrain jobs supervisor --concurrency "${GBRAIN_WORKER_CONCURRENCY:-2}"
+    ;;
+  autopilot)
+    setup_brain_repo
     exec gbrain autopilot --repo "$BRAIN_DIR"
     ;;
   dream)
