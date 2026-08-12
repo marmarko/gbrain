@@ -40,6 +40,7 @@ import { evaluateQuietHours } from '../core/minions/quiet-hours.ts';
 import { inspectLock } from '../core/db-lock.ts';
 import { registerCleanup } from '../core/process-cleanup.ts';
 import { resolveAutopilotDispatchTimeoutMs } from './autopilot-timeout.ts';
+import { dispatchTargetedSteps, stepsNotCoveredByFullCycle } from './autopilot-plan-dispatch.ts';
 
 /**
  * v0.37.7.0 #1162 — classify autopilot reconnect-loop errors.
@@ -968,6 +969,36 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
             process.stderr.write(JSON.stringify({ event: 'skip_healthy', score, plan_size: 0 }) + '\n');
           }
         } else if (shouldFullCycle) {
+          // A full cycle performs sync/embed/extract/backlinks — but NOT
+          // extract-ner or extract-timeline-from-meetings, which are no phase in
+          // ALL_PHASES. `plan` used to be discarded entirely on this branch, so
+          // those steps were re-planned and re-dropped every tick and could never
+          // run. Dispatch exactly the uncovered ones; covered work is left to the
+          // cycle, and manual-only jobs are dropped at submit time. Ordering is
+          // deliberate: this runs BEFORE the fan-out, because everything below
+          // can throw (dynamic import, resolveEffectiveFanoutMax, dispatchPerSource)
+          // straight out to the branch's catch — which would silently skip these
+          // steps exactly when the brain is already struggling, reinstating the
+          // bug this fixes. Nothing here depends on `result` or `fanoutMax`.
+          // See autopilot-plan-dispatch.ts.
+          const uncovered = stepsNotCoveredByFullCycle(plan);
+          if (uncovered.length > 0) {
+            await dispatchTargetedSteps(queue, uncovered, {
+              // Interval-derived, NOT the 30-min full-cycle anchor applied to the
+              // cycle jobs below (#2781). dispatchTargetedSteps raises this floor
+              // per step when the planner's own est_seconds is larger, since a
+              // timeout breach is terminal rather than a retry.
+              timeoutMs,
+              jsonMode,
+              score,
+              planSize: plan.length,
+              mode: 'full_cycle_uncovered',
+              onError: logError,
+              log: (line) => console.log(line),
+              emitJson: (line) => process.stderr.write(line),
+            });
+          }
+
           // v0.38: per-source fan-out replaces the single-job dispatch.
           // dispatchPerSource enumerates sources via listAllSources
           // ({ localPathOnly: true }), gates each on per-source
@@ -1039,31 +1070,16 @@ export async function runAutopilot(engine: BrainEngine, args: string[]) {
           // D9 content-hash idempotency keys (from computeRecommendations).
           // maxWaiting:1 per submit per codex #17 (closes the backpressure
           // gap the prior implementation had for targeted submits).
-          for (const step of plan) {
-            try {
-              const isProtected = !!step.protected;
-              const submitOpts = {
-                queue: 'default',
-                idempotency_key: step.idempotency_key,
-                max_attempts: 2,
-                timeout_ms: timeoutMs,
-                maxWaiting: 1,
-              };
-              const job = await queue.add(
-                step.job,
-                step.params,
-                submitOpts,
-                isProtected ? { allowProtectedSubmit: true } : undefined,
-              );
-              if (jsonMode) {
-                process.stderr.write(JSON.stringify({ event: 'dispatched', job_id: job.id, mode: 'targeted', step: step.id, score, plan_size: plan.length }) + '\n');
-              } else {
-                console.log(`[dispatch] job #${job.id} ${step.job} (targeted: ${step.id}; score=${score})`);
-              }
-            } catch (e) {
-              logError('dispatch.step', e);
-            }
-          }
+          await dispatchTargetedSteps(queue, plan, {
+            timeoutMs,
+            jsonMode,
+            score,
+            planSize: plan.length,
+            mode: 'targeted',
+            onError: logError,
+            log: (line) => console.log(line),
+            emitJson: (line) => process.stderr.write(line),
+          });
         }
       } catch (e) { logError('dispatch', e); cycleOk = false; }
     } else {

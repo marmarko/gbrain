@@ -69,3 +69,28 @@ export const PROTECTED_JOB_NAMES: ReadonlySet<string> = new Set([
 export function isProtectedJobName(name: string): boolean {
   return PROTECTED_JOB_NAMES.has(name.trim());
 }
+
+/**
+ * Protected jobs that a background scheduler must NEVER auto-submit, even with
+ * `allowProtectedSubmit`. These require a consenting human decision per run.
+ *
+ * `allowProtectedSubmit` alone is the wrong gate for them: it answers "is this
+ * caller trusted?", not "should this run unattended?". The autopilot is trusted
+ * and would happily set it, which is precisely the danger — `unify-types`
+ * carries `params: { apply: true }` and flips the brain's active schema pack,
+ * retyping every page. That is a one-time consenting decision, not a tick.
+ *
+ * Lives here rather than in `src/core/onboard/render.ts` (its original home)
+ * because it is a dispatch-safety invariant, and render.ts's copy was reachable
+ * only through `toOnboardRecommendation` — a function the autopilot never calls,
+ * so the invariant silently did not apply to scheduled dispatch. render.ts now
+ * imports this so the two cannot drift.
+ */
+export const MANUAL_ONLY_PROTECTED_JOBS: ReadonlySet<string> = new Set([
+  // v0.41.18.0 (A12, A24): takes-bootstrap classifier stays manual_only
+  // until the 100+-case eval lands. Also carries est_usd_cost 5.00.
+  'extract-takes-from-pages',
+  // v0.42 (D17): pack-upgrade migration. Taxonomy change is a one-time
+  // consenting user decision; autopilot must not auto-flip the schema pack.
+  'unify-types',
+]);

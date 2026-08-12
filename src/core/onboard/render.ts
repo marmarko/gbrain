@@ -28,14 +28,11 @@ import type {
  * handlers without a mature eval. Adding a new entry here is a load-
  * bearing choice — confirm the apply_policy posture before commit.
  */
-const MANUAL_ONLY_PROTECTED_JOBS: ReadonlySet<string> = new Set([
-  // v0.41.18.0 (A12, A24): takes-bootstrap classifier stays manual_only
-  // until v0.42.1 lands the 100+-case eval.
-  'extract-takes-from-pages',
-  // v0.42 (D17): pack-upgrade migration. Taxonomy change is a one-time
-  // consenting user decision; autopilot must not auto-flip the schema pack.
-  'unify-types',
-]);
+// Re-exported from the shared dispatch-safety module so this rendering path and
+// the autopilot's scheduled dispatch cannot drift. The set used to live here,
+// which meant it was only ever consulted by toOnboardRecommendation below —
+// autopilot never calls that, so scheduled dispatch was not covered by it.
+import { MANUAL_ONLY_PROTECTED_JOBS } from '../minions/protected-names.ts';
 
 export function toOnboardRecommendation(step: RemediationStep): OnboardRecommendation {
   let apply_policy: OnboardRecommendation['apply_policy'] = 'auto_apply';

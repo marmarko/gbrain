@@ -48,11 +48,18 @@ describe('autopilot.ts ↔ dispatchPerSource wiring', () => {
     // shouldFullCycle is true, not in the targeted-plan path.
     const dispatchIdx = AUTOPILOT_SRC.indexOf('dispatchPerSource(engine, queue');
     expect(dispatchIdx).toBeGreaterThan(-1);
-    // Verify shouldFullCycle is structurally near the call (within
-    // ~3000 chars of source, roughly the same if/else branch)
-    const fullCycleIdx = AUTOPILOT_SRC.indexOf('shouldFullCycle');
-    expect(fullCycleIdx).toBeGreaterThan(-1);
-    expect(Math.abs(dispatchIdx - fullCycleIdx)).toBeLessThan(3000);
+    // Structural containment rather than a character-distance proxy. The
+    // previous form asserted the call sat within ~3000 chars of the
+    // `shouldFullCycle` token, which broke the moment a legitimate block was
+    // added inside the same branch — a false positive that says nothing about
+    // which branch the call is actually in. Bounding it by the branch's own
+    // delimiters tests the real invariant and is immune to unrelated growth.
+    const branchStart = AUTOPILOT_SRC.indexOf('} else if (shouldFullCycle) {');
+    expect(branchStart).toBeGreaterThan(-1);
+    const branchEnd = AUTOPILOT_SRC.indexOf('\n        } else {', branchStart);
+    expect(branchEnd).toBeGreaterThan(branchStart);
+    expect(dispatchIdx).toBeGreaterThan(branchStart);
+    expect(dispatchIdx).toBeLessThan(branchEnd);
   });
 
   test('applies the 30-minute timeout floor only to full-cycle dispatch', () => {
